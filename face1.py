@@ -29,9 +29,9 @@ with mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence
             detection_count += (current_face_count - previous_face_count)
         previous_face_count = current_face_count
 
-        cv2.putText(frame, f"Faces: {current_face_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Total: {detection_count}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.imshow('Mediapipe Face Detection', frame)
+        # cv2.putText(frame, f"Faces: {current_face_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # cv2.putText(frame, f"Total: {detection_count}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # cv2.imshow('Mediapipe Face Detection', frame)
 
         print(f"Faces: {current_face_count}, Count: {detection_count}")
 
