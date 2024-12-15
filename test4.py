@@ -27,14 +27,10 @@ def adjust_parameters(frame, detections):
 def process_video(video_path, output_path, model, default_confidence):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Error: Could not open video file {video_path}")
+        print(f"Error: Không thể mở video {video_path}")
         return
 
-    # Initialize counts for vehicles and pedestrians
-    previous_vehicle_count = 0
-    previous_pedestrian_count = 0
-    total_vehicle_count = 0
-    total_pedestrian_count = 0
+    deep_sort = DeepSort(max_age=30)
 
     original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -46,65 +42,96 @@ def process_video(video_path, output_path, model, default_confidence):
 
     vehicle_classes = ['car', 'bus', 'truck', 'motorcycle']
     pedestrian_classes = ['person']
+    
+    class_to_index = {name: idx for idx, name in model.names.items()}
+    
+    vehicle_indices = [class_to_index[c] for c in vehicle_classes if c in class_to_index]
+    pedestrian_indices = [class_to_index[c] for c in pedestrian_classes if c in class_to_index]
+    interested_indices = vehicle_indices + pedestrian_indices
+
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Khởi tạo bộ đếm
+    current_vehicle_count = 0
+    total_vehicle_count = 0
+    current_pedestrian_count = 0
+    total_pedestrian_count = 0
+    tracked_ids = set()
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        frame = cv2.resize(frame, (new_width, new_height))
+        frame_resized = cv2.resize(frame, (new_width, new_height))
+        results = model(frame_resized)
 
-        results = model(frame)
-        detections = results.pandas().xyxy[0]
-
-        # Adjust parameters based on frame and detections
-        confidence = adjust_parameters(frame, detections)
-
-        detections = detections[detections['confidence'] >= confidence]
-        detections = detections[detections['name'].isin(vehicle_classes + pedestrian_classes)]
-
-        # Count vehicles and pedestrians
-        current_vehicle_count = len(detections[detections['name'].isin(vehicle_classes)])
-        current_pedestrian_count = len(detections[detections['name'].isin(pedestrian_classes)])
-
-        # Update total counts
-        if current_vehicle_count > previous_vehicle_count:
-            total_vehicle_count += (current_vehicle_count - previous_vehicle_count)
-        if current_pedestrian_count > previous_pedestrian_count:
-            total_pedestrian_count += (current_pedestrian_count - previous_pedestrian_count)
-
-        # Draw detection boxes and labels
-        for _, detection in detections.iterrows():
-            x1, y1, x2, y2 = map(int, detection[['xmin', 'ymin', 'xmax', 'ymax']])
-            label = detection['name']
-            color = (0, 255, 0) if label in vehicle_classes else (0, 0, 255)
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-        # Display counts for vehicles and pedestrians
-        info_text = [
-            f"Current Vehicles: {current_vehicle_count}",
-            f"Total Vehicles: {total_vehicle_count}",
-            f"Current People: {current_pedestrian_count}",
-            f"Total People: {total_pedestrian_count}"
+        detections = results.xyxy[0].cpu().numpy()
+        
+        valid_detections = detections[
+            (detections[:, 4] >= default_confidence) & 
+            np.isin(detections[:, 5], interested_indices)
         ]
+        
+        # Reset current counts for each frame
+        current_vehicle_count = 0
+        current_pedestrian_count = 0
 
-        for i, text in enumerate(info_text):
-            cv2.putText(frame, text, (10, 30 + i * 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        if len(valid_detections) > 0:
+            track_boxes = valid_detections[:, :4]
+            track_scores = valid_detections[:, 4]
+            track_class_ids = valid_detections[:, 5]
+            
+            detections_for_deepsort = [
+                ([x1, y1, x2 - x1, y2 - y1], score, class_id) 
+                for (x1, y1, x2, y2), score, class_id in zip(track_boxes, track_scores, track_class_ids)
+            ]
 
-        # Write frame
-        out.write(frame)
+            tracks = deep_sort.update_tracks(detections_for_deepsort, frame=frame_resized)
 
-        # Update previous counts
-        previous_vehicle_count = current_vehicle_count
-        previous_pedestrian_count = current_pedestrian_count
+            for track in tracks:
+                if track.is_confirmed():
+                    ltrb = track.to_ltrb()
+                    x1, y1, x2, y2 = map(int, ltrb)
+                    class_id = track.get_det_class()
+                    label = 'Vehicle' if class_id in vehicle_indices else 'Person'
+                    color = (0, 255, 0) if label == 'Vehicle' else (0, 0, 255)
+                    cv2.rectangle(frame_resized, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(frame_resized, f"{label} ID:{track.track_id}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    
+                    # Đếm đối tượng
+                    if label == 'Vehicle':
+                        current_vehicle_count += 1
+                        if track.track_id not in tracked_ids:
+                            tracked_ids.add(track.track_id)
+                            total_vehicle_count += 1
+                    else:
+                        current_pedestrian_count += 1
+                        if track.track_id not in tracked_ids:
+                            tracked_ids.add(track.track_id)
+                            total_pedestrian_count += 1
+
+        # Hiển thị số lượng đối tượng trên video
+        cv2.putText(frame_resized, f"Current Vehicles: {current_vehicle_count}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame_resized, f"Total Vehicles: {total_vehicle_count}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame_resized, f"Current People: {current_pedestrian_count}", (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame_resized, f"Total People: {total_pedestrian_count}", (10, 120),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        out.write(frame_resized)
+
+        # Hiển thị tiến độ xử lý
+        current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        progress = (current_frame / frame_count) * 100
+        print(f"\rProcessing video... {current_frame}/{frame_count} frames ({progress:.2f}%)", end="")
 
     cap.release()
     out.release()
-    print(f"Output video saved to {output_path}")
+    print(f"\nVideo đầu ra đã được lưu tại {output_path}")
 
 def process_multiple_videos(video_paths, output_dir, confidence):
     # Create the output directory if it doesn't exist
@@ -130,7 +157,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # List of video files to process
-    video_paths = ["video/test33.mp4"]
+    video_paths = ["video/test1.mp4",
+                   "video/test2.mp4",
+                   "video/test3.mp4",
+                   "video/test11.mp4",
+                   "video/test22.mp4",
+                   "video/test33.mp4",
+                   "video/test111.mp4",
+                   "video/test222.mp4",
+                   "video/test333.mp4",
+                   "video/test1111.mp4",
+                   "video/test3333.mp4",
+                ]
 
     # Directory to save processed videos
     output_dir = "result_videos"

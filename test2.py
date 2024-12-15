@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import os
 from pathlib import Path
+import time
 
 def load_yolo_model():
     # Load YOLOv5 model
@@ -98,6 +99,13 @@ def process_video(video_path, output_path, model):
     print(f"Output video saved to {output_path}")
 
 def process_multiple_videos(video_paths, output_dir):
+
+    # Ghi nhận thời gian bắt đầu
+    start_time = time.time()
+
+    # In ra thời gian bắt đầu
+    print(f"Thời gian bắt đầu: {time.strftime('%H:%M:%S', time.localtime(start_time))}")
+                                              
     # Create the output directory if it doesn't exist
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -115,10 +123,22 @@ def process_multiple_videos(video_paths, output_dir):
         print(f"Processing {video_path}...")
         process_video(video_path, output_path, model)
 
+    # Sau khi xử lý tất cả video, ghi nhận thời gian kết thúc
+    end_time = time.time()
+    
+    # In ra thời gian kết thúc
+    print(f"Thời gian kết thúc: {time.strftime('%H:%M:%S', time.localtime(end_time))}")
+
+    # Tính và in ra thời gian hoàn thành
+    completion_time = end_time - start_time
+    hours, rem = divmod(completion_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print(f"Thời gian hoàn thành: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
+
 if __name__ == "__main__":
     # List of video files to process
     video_paths = [
-        "test33333.mp4"
+        "video/test111.mp4"
     ]
 
     # Directory to save processed videos
